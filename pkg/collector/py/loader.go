@@ -25,15 +25,17 @@ import (
 )
 
 var (
-	pyLoaderStats        *expvar.Map
-	configureErrors      map[string][]string
-	py3Warnings          map[string][]string
-	statsLock            sync.RWMutex
-	a7IncompatibleMetric = "datadog.agent.a7_incompatible_check"
+	pyLoaderStats   *expvar.Map
+	configureErrors map[string][]string
+	py3Warnings     map[string][]string
+	statsLock       sync.RWMutex
 )
 
 const (
 	wheelNamespace = "datadog_checks"
+	a7ReadyMetric  = "datadog.agent.check_ready"
+	a7Ready        = 1
+	a7NotReady     = 0
 )
 
 func init() {
@@ -204,11 +206,11 @@ func (cl *PythonCheckLoader) Load(config integration.Config) ([]check.Check, err
 					if warnings, err := validatePython3(name, filePath); err == nil {
 						addExpvarPy3Warnings(name, warnings, cl.telemetry)
 					} else {
-						cl.telemetry.Gauge(a7IncompatibleMetric, 1, "", []string{"check_name:" + name})
+						cl.telemetry.Gauge(a7ReadyMetric, a7NotReady, "", []string{"check_name:" + name})
 						log.Errorf("could not lint check %s for Python3 compatibility: %s", name, err)
 					}
 				} else {
-					cl.telemetry.Gauge(a7IncompatibleMetric, 1, "", []string{"check_name:" + name})
+					cl.telemetry.Gauge(a7ReadyMetric, a7NotReady, "", []string{"check_name:" + name})
 					log.Debugf("error: %s check attribute '__file__' is not a type string", name)
 				}
 			} else {
@@ -283,10 +285,10 @@ func addExpvarPy3Warnings(checkName string, warnings []string, telemetry aggrega
 	defer statsLock.Unlock()
 
 	if len(warnings) > 0 {
-		telemetry.Gauge(a7IncompatibleMetric, 1, "", []string{"check_name:" + checkName})
+		telemetry.Gauge(a7ReadyMetric, a7NotReady, "", []string{"check_name:" + checkName})
 		py3Warnings[checkName] = warnings
 	} else {
-		telemetry.Gauge(a7IncompatibleMetric, 0, "", []string{"check_name:" + checkName})
+		telemetry.Gauge(a7ReadyMetric, a7Ready, "", []string{"check_name:" + checkName})
 		log.Debugf("check '%s' seems to be compatible with Python3", checkName)
 	}
 }
