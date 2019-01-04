@@ -32,6 +32,10 @@ var (
 	a7IncompatibleMetric = "datadog.agent.a7_incompatible_check"
 )
 
+const (
+	wheelNamespace = "datadog_checks"
+)
+
 func init() {
 	factory := func() (check.Loader, error) {
 		return NewPythonCheckLoader()
@@ -89,7 +93,7 @@ func NewPythonCheckLoader() (*PythonCheckLoader, error) {
 func (cl *PythonCheckLoader) Load(config integration.Config) ([]check.Check, error) {
 	checks := []check.Check{}
 	moduleName := config.Name
-	whlModuleName := fmt.Sprintf("datadog_checks.%s", config.Name)
+	whlModuleName := fmt.Sprintf("%s.%s", wheelNamespace, config.Name)
 
 	// Looking for wheels first
 	modules := []string{whlModuleName, moduleName}
@@ -108,10 +112,14 @@ func (cl *PythonCheckLoader) Load(config integration.Config) ([]check.Check, err
 	var pyErr string
 	var checkModule *python.PyObject
 	var name string
+	var loadedAsWheel bool
 	for _, name = range modules {
 		// import python module containing the check
 		checkModule = python.PyImport_ImportModule(name)
 		if checkModule != nil {
+			if strings.HasPrefix(name, fmt.Sprintf("%s.", wheelNamespace)) {
+				loadedAsWheel = true
+			}
 			break
 		}
 
@@ -177,35 +185,37 @@ func (cl *PythonCheckLoader) Load(config integration.Config) ([]check.Check, err
 			}
 			log.Debugf("python check '%s' doesn't have a '__version__' attribute", config.Name)
 
-			if !agentConfig.Datadog.GetBool("disable_py3_validation") {
-				// A check without a __version__ is most likely a
-				// custom check: let's check for py3 compatibility
-				checkFilePath := checkModule.GetAttrString("__file__")
-				if checkFilePath != nil {
-					defer checkFilePath.DecRef()
-					if python.PyString_Check(checkFilePath) {
-						filePath := python.PyString_AsString(checkFilePath)
+		}
 
-						// __file__ return the .pyc file path
-						if strings.HasSuffix(moduleName, ".pyc") {
-							filePath = filePath[:len(filePath)-1]
-						}
-						if warnings, err := validatePython3(name, filePath); err == nil {
-							addExpvarPy3Warnings(name, warnings, cl.telemetry)
-						} else {
-							cl.telemetry.Gauge(a7IncompatibleMetric, 1, "", []string{"check_name:" + name})
-							log.Errorf("could not lint check %s for Python3 compatibility: %s", name, err)
-						}
+		if !agentConfig.Datadog.GetBool("disable_py3_validation") && !loadedAsWheel {
+			// Customers, though unlikely might version their custom checks.
+			// Let's use the module namespace to try to decide if this was a
+			// custom check, check for py3 compatibility
+			checkFilePath := checkModule.GetAttrString("__file__")
+			if checkFilePath != nil {
+				defer checkFilePath.DecRef()
+				if python.PyString_Check(checkFilePath) {
+					filePath := python.PyString_AsString(checkFilePath)
+
+					// __file__ return the .pyc file path
+					if strings.HasSuffix(moduleName, ".pyc") {
+						filePath = filePath[:len(filePath)-1]
+					}
+					if warnings, err := validatePython3(name, filePath); err == nil {
+						addExpvarPy3Warnings(name, warnings, cl.telemetry)
 					} else {
 						cl.telemetry.Gauge(a7IncompatibleMetric, 1, "", []string{"check_name:" + name})
-						log.Debugf("error: %s check attribute '__file__' is not a type string", name)
+						log.Errorf("could not lint check %s for Python3 compatibility: %s", name, err)
 					}
 				} else {
-					log.Debugf("Could not query the __file__ attribute for check %s", name)
-					python.PyErr_Clear()
+					cl.telemetry.Gauge(a7IncompatibleMetric, 1, "", []string{"check_name:" + name})
+					log.Debugf("error: %s check attribute '__file__' is not a type string", name)
 				}
-				cl.telemetry.Commit()
+			} else {
+				log.Debugf("Could not query the __file__ attribute for check %s", name)
+				python.PyErr_Clear()
 			}
+			cl.telemetry.Commit()
 		}
 	}
 
