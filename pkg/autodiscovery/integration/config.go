@@ -173,6 +173,9 @@ func (c *Data) GetNameForInstance() string {
 
 // MergeAdditionalTags merges additional tags to possible existing config tags
 func (c *Data) MergeAdditionalTags(tags []string) error {
+	if len(tags) == 0 {
+		return nil
+	}
 	rawConfig := RawMap{}
 	err := yaml.Unmarshal(*c, &rawConfig)
 	if err != nil {
@@ -199,6 +202,25 @@ func (c *Data) MergeAdditionalTags(tags []string) error {
 		rawConfig["tags"] = append(rawConfig["tags"].([]string), k)
 	}
 	// modify original config
+	out, err := yaml.Marshal(&rawConfig)
+	if err != nil {
+		return err
+	}
+	*c = Data(out)
+
+	return nil
+}
+
+// SetField allows to set an arbitrary field to a given value,
+// overriding the existing value if present
+func (c *Data) SetField(key string, value interface{}) error {
+	rawConfig := RawMap{}
+	err := yaml.Unmarshal(*c, &rawConfig)
+	if err != nil {
+		return err
+	}
+
+	rawConfig[key] = value
 	out, err := yaml.Marshal(&rawConfig)
 	if err != nil {
 		return err
